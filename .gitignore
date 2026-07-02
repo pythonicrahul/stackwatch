@@ -1,5 +1,17 @@
 node_modules/
 lib/
+coverage/
 *.log
+*.tsbuildinfo
 .DS_Store
+
+# Local env / secrets
+.env
+.env.*
+
+# Editor / AI tooling
+.claude/
+.cursor/
+.vscode/
+
 PRD.md

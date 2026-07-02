@@ -7,7 +7,9 @@
   "scripts": {
     "build": "ncc build src/main.ts -o dist --minify --license licenses.txt",
     "typecheck": "tsc --noEmit",
-    "package": "npm run typecheck && npm run build"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "package": "npm run typecheck && npm run test && npm run build"
   },
   "license": "MIT",
   "dependencies": {
@@ -17,6 +19,7 @@
   "devDependencies": {
     "@types/node": "^20.14.0",
     "@vercel/ncc": "^0.38.1",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "vitest": "^3.2.6"
   }
 }

@@ -101,8 +101,12 @@ so the next run picks up exactly where this one left off.
 ```bash
 npm install
 npm run typecheck
+npm test           # vitest — unit tests for every module, mocking network/@actions/cache
 npm run build      # produces dist/index.js via @vercel/ncc
+npm run package    # typecheck + test + build, in that order
 ```
 
-`dist/index.js` is committed and rebuilt automatically by
-`.github/workflows/release.yml` on every push to `main`; don't hand-edit it.
+Tests are colocated as `src/**/*.test.ts` and never bundled into `dist/index.js`
+(`ncc` only follows `main.ts`'s own runtime imports). `dist/index.js` is
+committed and rebuilt automatically by `.github/workflows/release.yml` on
+every push to `main`; don't hand-edit it.
