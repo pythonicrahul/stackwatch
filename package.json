@@ -1,0 +1,22 @@
+{
+  "name": "stackwatch",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GitHub Action that monitors third-party developer tool status pages and posts Slack alerts on state transitions.",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "ncc build src/main.ts -o dist --minify --license licenses.txt",
+    "typecheck": "tsc --noEmit",
+    "package": "npm run typecheck && npm run build"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@actions/cache": "^5.1.0",
+    "@actions/core": "^1.10.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@vercel/ncc": "^0.38.1",
+    "typescript": "^5.5.0"
+  }
+}

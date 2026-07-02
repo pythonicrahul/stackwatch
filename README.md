@@ -1,0 +1,108 @@
+# stackwatch
+
+A GitHub Action that watches the public status pages of the third-party
+developer tools your team depends on, and posts a Slack alert the moment one
+degrades, recovers, or becomes unreachable. Silent when everything is
+healthy; fires once per incident, not once per run.
+
+See [`PRD.md`](./PRD.md) for the full product requirements.
+
+## MVP vendor support
+
+This release supports 4 commonly-used vendors:
+
+| Vendor      | Status page              |
+| ----------- | ------------------------- |
+| GitHub      | githubstatus.com          |
+| Datadog     | status.datadoghq.com      |
+| ClickHouse Cloud | status.clickhouse.com |
+| Claude / Anthropic | status.claude.com  |
+
+More vendors (Slack, AWS, Vercel, PagerDuty, Linear, ...) can be added later
+without restructuring — see [Adding a vendor](#adding-a-vendor).
+
+## Usage
+
+```yaml
+name: stackwatch
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write   # required so stackwatch can persist state in a repo variable
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: yourusername/stackwatch@v1
+        with:
+          slack_webhook: ${{ secrets.STACKWATCH_SLACK_WEBHOOK }}
+          monitor_github: true
+          monitor_datadog: true
+          monitor_clickhouse: true
+          monitor_claude: true
+```
+
+### Setup
+
+1. Create a [Slack incoming webhook](https://api.slack.com/messaging/webhooks)
+   for the channel you want alerts in, and save it as a repository secret
+   named `STACKWATCH_SLACK_WEBHOOK`.
+2. Add the workflow above to `.github/workflows/stackwatch.yml`.
+3. Grant `permissions: actions: write` (shown above) — this lets stackwatch
+   read/write a repo variable named `STACKWATCH_STATE` used to remember what
+   was already alerted, so it doesn't repeat itself every run.
+4. Pass `GITHUB_TOKEN` through as a step/job `env` var, exactly as shown above.
+   GitHub does **not** inject it into an action's process automatically —
+   without this line, stackwatch falls back to GitHub Actions cache for state,
+   which works but is best-effort only (cache keys are immutable once written,
+   so it can't reliably track state run after run).
+5. Enable whichever `monitor_*` inputs you want — every vendor defaults to
+   `false` (opt-in only).
+
+Inputs you don't set stay disabled and are never fetched.
+
+### Inputs
+
+| Name                 | Type    | Required | Default | Description                     |
+| -------------------- | ------- | -------- | ------- | -------------------------------- |
+| `slack_webhook`      | string  | Yes      | —       | Slack incoming webhook URL       |
+| `monitor_github`     | boolean | No       | `false` | Monitor GitHub status            |
+| `monitor_datadog`    | boolean | No       | `false` | Monitor Datadog status           |
+| `monitor_clickhouse` | boolean | No       | `false` | Monitor ClickHouse Cloud status  |
+| `monitor_claude`     | boolean | No       | `false` | Monitor Claude / Anthropic status|
+
+## How it works
+
+On each run: read inputs → fetch all enabled vendors' status APIs
+concurrently (5s timeout, one retry each) → read previous state (repo
+variable, falling back to Actions cache) → diff against current results →
+if anything changed, send one batched Slack message and persist the new
+state. If nothing changed, or if the Slack send fails, no state is written,
+so the next run picks up exactly where this one left off.
+
+## Adding a vendor
+
+1. If the vendor runs on Atlassian Statuspage (`/api/v2/summary.json`), add
+   one line to `src/fetchers/index.ts` calling
+   `createStatuspageFetcher(name, url)`. Otherwise write a dedicated adapter
+   under `src/fetchers/` following `clickhouse.ts` as a template.
+2. Register the vendor in `VendorId` (`src/types.ts`), `VENDOR_INPUTS`
+   (`src/config.ts`), and as a new `monitor_*` input in `action.yml`.
+3. Run `npm run package` to rebuild `dist/index.js`.
+
+## Development
+
+```bash
+npm install
+npm run typecheck
+npm run build      # produces dist/index.js via @vercel/ncc
+```
+
+`dist/index.js` is committed and rebuilt automatically by
+`.github/workflows/release.yml` on every push to `main`; don't hand-edit it.

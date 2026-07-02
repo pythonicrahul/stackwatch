@@ -1,0 +1,34 @@
+name: 'stackwatch'
+description: >
+  Monitors the health of third-party developer tool status pages and posts an
+  instant Slack alert when a monitored service degrades, recovers, or becomes
+  unreachable. Silent when everything is healthy.
+author: 'rahuljain'
+branding:
+  icon: 'activity'
+  color: 'orange'
+
+inputs:
+  slack_webhook:
+    description: 'Slack incoming webhook URL to post alerts to.'
+    required: true
+  monitor_github:
+    description: 'Monitor GitHub status (githubstatus.com).'
+    required: false
+    default: 'false'
+  monitor_datadog:
+    description: 'Monitor Datadog status (status.datadoghq.com).'
+    required: false
+    default: 'false'
+  monitor_clickhouse:
+    description: 'Monitor ClickHouse Cloud status (status.clickhouse.com).'
+    required: false
+    default: 'false'
+  monitor_claude:
+    description: 'Monitor Claude / Anthropic status (status.claude.com).'
+    required: false
+    default: 'false'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
