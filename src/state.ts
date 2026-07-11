@@ -5,7 +5,6 @@ import * as os from 'os';
 import * as path from 'path';
 import { SCHEMA_VERSION, StackState } from './types';
 
-const REPO_VARIABLE_NAME = 'STACKWATCH_STATE';
 const CACHE_KEY_PREFIX = 'stackwatch-state-v1';
 const CACHE_STATE_FILE = 'stackwatch-state.json';
 
@@ -29,68 +28,6 @@ function parseState(raw: string): StackState | null {
   }
 }
 
-function repoApiBase(): string | null {
-  const repo = process.env.GITHUB_REPOSITORY;
-  return repo ? `https://api.github.com/repos/${repo}` : null;
-}
-
-/** GITHUB_TOKEN is not injected automatically — the consumer workflow must
- * pass it explicitly (`env: GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}`)
- * alongside `permissions: actions: write` (Assumption A-2). Its absence is
- * not an error here; it just means this layer is unavailable and callers
- * fall back to the cache layer. */
-function authHeaders(): Record<string, string> | null {
-  const token = process.env.GITHUB_TOKEN;
-  if (!token) return null;
-  return {
-    Authorization: `Bearer ${token}`,
-    Accept: 'application/vnd.github+json',
-    'Content-Type': 'application/json',
-  };
-}
-
-async function readRepoVariable(): Promise<StackState | null> {
-  const base = repoApiBase();
-  const headers = authHeaders();
-  if (!base || !headers) return null;
-
-  const response = await fetch(`${base}/actions/variables/${REPO_VARIABLE_NAME}`, { headers });
-  if (response.status === 404) return emptyState();
-  if (!response.ok) {
-    throw new Error(`repo variable read failed with status ${response.status}`);
-  }
-  const body = (await response.json()) as { value: string };
-  return parseState(body.value) ?? emptyState();
-}
-
-async function writeRepoVariable(state: StackState): Promise<void> {
-  const base = repoApiBase();
-  const headers = authHeaders();
-  if (!base || !headers) {
-    throw new Error('repo variable write skipped: missing GITHUB_REPOSITORY or GITHUB_TOKEN');
-  }
-  const value = JSON.stringify(state);
-
-  const patchResponse = await fetch(`${base}/actions/variables/${REPO_VARIABLE_NAME}`, {
-    method: 'PATCH',
-    headers,
-    body: JSON.stringify({ name: REPO_VARIABLE_NAME, value }),
-  });
-  if (patchResponse.ok) return;
-  if (patchResponse.status !== 404) {
-    throw new Error(`repo variable update failed with status ${patchResponse.status}`);
-  }
-
-  const createResponse = await fetch(`${base}/actions/variables`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ name: REPO_VARIABLE_NAME, value }),
-  });
-  if (!createResponse.ok) {
-    throw new Error(`repo variable create failed with status ${createResponse.status}`);
-  }
-}
-
 /** MUST be a fixed path, not a freshly-generated one (e.g. via
  * `mkdtempSync`). `@actions/cache`'s restore extracts files to the exact
  * absolute path recorded at save time (GNU tar with `-P`), not to whatever
@@ -101,58 +38,44 @@ function cacheStateFilePath(): string {
   return path.join(os.tmpdir(), CACHE_STATE_FILE);
 }
 
-/** Actions cache keys are immutable once saved — writing under a fixed key
- * a second time fails with "unable to reserve cache" (confirmed in real E2E
- * testing: the write silently no-ops instead of throwing). Without a
- * mutable key, every run after the first state change would keep restoring
- * the *same* stale entry forever and re-alert on it every time, which
- * breaks the no-repeat-alert guarantee (P-3/G-3) outright — worse than
- * merely "best effort". So each write uses a fresh, unique key, and reads
- * use `restoreKeys` prefix matching to fetch whichever one was saved most
- * recently; older entries just age out via the normal 7-day cache eviction. */
-async function readCacheState(): Promise<StackState> {
-  const filePath = cacheStateFilePath();
-  const hitKey = await cache.restoreCache([filePath], `${CACHE_KEY_PREFIX}-none`, [CACHE_KEY_PREFIX]);
-  if (!hitKey || !fs.existsSync(filePath)) return emptyState();
-  return parseState(fs.readFileSync(filePath, 'utf8')) ?? emptyState();
-}
-
-async function writeCacheState(state: StackState): Promise<void> {
-  const filePath = cacheStateFilePath();
-  fs.writeFileSync(filePath, JSON.stringify(state));
-  await cache.saveCache([filePath], `${CACHE_KEY_PREFIX}-${crypto.randomUUID()}`);
-}
-
-/** Reads previous state: repo variable is primary (FR-12), Actions cache is
- * the fallback (FR-13). Returns a fresh empty state on first run at either
- * layer, or when neither layer is reachable (FR-14). */
+/** State is stored entirely in GitHub Actions cache — no GitHub API token is
+ * required. The Actions REST API for repo variables/secrets is deliberately
+ * off-limits to the automatic per-run `GITHUB_TOKEN` regardless of the
+ * `permissions:` block (confirmed via real testing: a 403 on that endpoint
+ * even with `actions: write` granted), so a repo-variable-backed primary
+ * layer would only ever work for consumers willing to supply a personal
+ * access token — real friction this design avoids entirely.
+ *
+ * Cache keys are immutable once saved — reusing a fixed key on a second
+ * write fails with "unable to reserve cache" (confirmed in E2E testing: the
+ * write silently no-ops instead of throwing). Without a mutable key, every
+ * run after the first state change would keep restoring the *same* stale
+ * entry forever and re-alert on it every time, breaking the no-repeat-alert
+ * guarantee (P-3/G-3) outright. So `writeState` uses a fresh, unique key per
+ * write, and `readState` uses `restoreKeys` prefix matching to fetch
+ * whichever one was saved most recently; older entries just age out via the
+ * platform's normal 7-day cache eviction. */
 export async function readState(): Promise<StackState> {
   try {
-    const state = await readRepoVariable();
-    if (state) return state;
+    const filePath = cacheStateFilePath();
+    const hitKey = await cache.restoreCache([filePath], `${CACHE_KEY_PREFIX}-none`, [CACHE_KEY_PREFIX]);
+    if (!hitKey || !fs.existsSync(filePath)) return emptyState();
+    return parseState(fs.readFileSync(filePath, 'utf8')) ?? emptyState();
   } catch (error) {
-    core.warning(`stackwatch: repo variable state read failed, falling back to cache: ${(error as Error).message}`);
-  }
-  try {
-    return await readCacheState();
-  } catch (error) {
-    core.warning(`stackwatch: cache state read also failed, treating as first run: ${(error as Error).message}`);
+    core.warning(`stackwatch: cache state read failed, treating as first run: ${(error as Error).message}`);
     return emptyState();
   }
 }
 
-/** Persists state: repo variable primary, Actions cache fallback. Callers
- * MUST only invoke this after alerts have been sent successfully (FR-16). */
+/** Callers MUST only invoke this after alerts have been sent successfully
+ * (FR-16). Failures here are logged, not thrown — a missed state write just
+ * means the next run retries from the same previous state. */
 export async function writeState(state: StackState): Promise<void> {
   try {
-    await writeRepoVariable(state);
-    return;
+    const filePath = cacheStateFilePath();
+    fs.writeFileSync(filePath, JSON.stringify(state));
+    await cache.saveCache([filePath], `${CACHE_KEY_PREFIX}-${crypto.randomUUID()}`);
   } catch (error) {
-    core.warning(`stackwatch: repo variable state write failed, falling back to cache: ${(error as Error).message}`);
-  }
-  try {
-    await writeCacheState(state);
-  } catch (error) {
-    core.warning(`stackwatch: cache state write also failed; next run will not see this update: ${(error as Error).message}`);
+    core.warning(`stackwatch: cache state write failed; next run will not see this update: ${(error as Error).message}`);
   }
 }

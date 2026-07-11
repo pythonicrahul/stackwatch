@@ -30,14 +30,9 @@ on:
     - cron: '*/5 * * * *'
   workflow_dispatch:
 
-permissions:
-  actions: write   # required so stackwatch can persist state in a repo variable
-
 jobs:
   check:
     runs-on: ubuntu-latest
-    env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: yourusername/stackwatch@v1
         with:
@@ -54,33 +49,23 @@ jobs:
    for the channel you want alerts in, and save it as a repository secret
    named `STACKWATCH_SLACK_WEBHOOK`.
 2. Add the workflow above to `.github/workflows/stackwatch.yml`.
-3. Grant `permissions: actions: write` (shown above).
-4. Pass a token through as the step/job `GITHUB_TOKEN` env var, exactly as
-   shown above — GitHub does **not** inject one into an action's process
-   automatically.
-
-   **Important:** the default `${{ secrets.GITHUB_TOKEN }}` will **not**
-   actually give you the repo-variable state layer. GitHub's automatic
-   per-run token cannot manage Actions variables/secrets via the REST API —
-   this is a hard platform restriction (to stop a workflow from
-   self-escalating by rewriting its own secrets), not a permissions
-   misconfiguration, and no `permissions:` block can grant it. Every
-   consumer using the default token will get a `403` on the repo-variable
-   read/write and silently fall back to the Actions cache layer instead.
-   That fallback is confirmed working end-to-end (including correctly
-   suppressing repeat alerts across runs) — it's a genuine fallback, not
-   just a stopgap — but the repo-variable layer is still the one to prefer
-   when you can, since Actions cache entries are subject to the platform's
-   normal 7-day/10GB-per-repo eviction.
-
-   To actually get the reliable repo-variable layer, create a
-   [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new)
-   scoped to just this repo with the **Variables: Read and write**
-   repository permission, save it as a secret (e.g. `STACKWATCH_PAT`), and
-   pass *that* as `GITHUB_TOKEN` in the workflow instead of
-   `secrets.GITHUB_TOKEN`.
-5. Enable whichever `monitor_*` inputs you want — every vendor defaults to
+3. Enable whichever `monitor_*` inputs you want — every vendor defaults to
    `false` (opt-in only).
+
+That's it — no `permissions:` block, no GitHub token, no PAT. State (which
+services were already alerted on) is stored entirely in GitHub Actions
+cache, which every workflow gets for free. An earlier version of this
+action tried to use a repo variable for that instead, authenticated with
+the workflow's own `GITHUB_TOKEN` — but GitHub deliberately blocks the
+automatic per-run token from managing Actions variables/secrets via the
+REST API (confirmed via real testing: a `403` even with `actions: write`
+granted, to stop a workflow from self-escalating by rewriting its own
+secrets). Making that work would have required every consumer to create
+and maintain a personal access token just for this — real friction for
+little benefit, since the cache-only design is confirmed reliable
+end-to-end (including correctly suppressing repeat alerts across runs).
+The one tradeoff: Actions cache entries are subject to the platform's
+normal 7-day-unused eviction, which in practice a 5-minute cron never hits.
 
 Inputs you don't set stay disabled and are never fetched.
 
@@ -97,11 +82,11 @@ Inputs you don't set stay disabled and are never fetched.
 ## How it works
 
 On each run: read inputs → fetch all enabled vendors' status APIs
-concurrently (5s timeout, one retry each) → read previous state (repo
-variable, falling back to Actions cache) → diff against current results →
-if anything changed, send one batched Slack message and persist the new
-state. If nothing changed, or if the Slack send fails, no state is written,
-so the next run picks up exactly where this one left off.
+concurrently (5s timeout, one retry each) → read previous state from
+GitHub Actions cache → diff against current results → if anything changed,
+send one batched Slack message and persist the new state. If nothing
+changed, or if the Slack send fails, no state is written, so the next run
+picks up exactly where this one left off.
 
 ## Adding a vendor
 
