@@ -178,3 +178,4 @@ Tests are colocated as `src/**/*.test.ts` and never bundled into `dist/index.js`
 (`ncc` only follows `main.ts`'s own runtime imports). `dist/index.js` is
 committed and rebuilt automatically by `.github/workflows/release.yml` on
 every push to `main`; don't hand-edit it.
+<!-- CI workflow verification test, will be closed without merging -->
