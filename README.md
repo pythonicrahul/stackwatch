@@ -81,12 +81,51 @@ Inputs you don't set stay disabled and are never fetched.
 
 ## How it works
 
-On each run: read inputs → fetch all enabled vendors' status APIs
-concurrently (5s timeout, one retry each) → read previous state from
-GitHub Actions cache → diff against current results → if anything changed,
-send one batched Slack message and persist the new state. If nothing
-changed, or if the Slack send fails, no state is written, so the next run
-picks up exactly where this one left off.
+Each run walks through one module per step — the labels below are the actual
+source files, in call order:
+
+```mermaid
+flowchart TD
+    A(["Cron schedule or workflow_dispatch"]) --> B["main.ts — entrypoint"]
+    B --> C["run.ts — orchestration"]
+    C --> D["config.ts\nread slack_webhook + monitor_* inputs"]
+    D --> E{"Any monitor_* enabled?"}
+    E -- No --> E1(["core.warning, exit\nno network calls, no Slack"])
+    E -- Yes --> F["fetchers/*.ts\nfetch enabled vendors concurrently\n5s timeout, 1 retry each"]
+    F --> G["state.ts: readState()\nrestore previous state from Actions cache"]
+    G --> H["diff.ts: diff()\ncompare previous vs. current, per vendor"]
+    H --> I{"hasChanges?"}
+    I -- No --> I1(["exit silently\nno Slack message, no state write"])
+    I -- Yes --> J["alert.ts: buildAlertBlocks()\nbatch new incidents + recoveries"]
+    J --> K["alert.ts: sendSlackAlert()"]
+    K --> L{"Slack accepted it?"}
+    L -- No --> L1(["core.setFailed()\nstate NOT written — next run retries"])
+    L -- Yes --> M["diff.ts: applyDiff()\ncompute next state"]
+    M --> N["state.ts: writeState()\nsave to Actions cache under a fresh key"]
+    N --> O(["Run complete"])
+```
+
+The trickiest part is the middle box — `diff.ts` classifies *each vendor
+independently* by comparing its restored previous status against its
+freshly-fetched current status:
+
+```mermaid
+flowchart TD
+    S["Per vendor: previous status vs. current fetched status"] --> T{"Is current status alertable?\ndegraded / partial / major / unknown"}
+    T -- No --> T1{"Was previous status alertable?"}
+    T1 -- Yes --> T1a(["RECOVERED\nalert once, reset alertedAt to null"])
+    T1 -- No --> T1b(["steady healthy / maintenance\ndo nothing"])
+    T -- Yes --> U{"Was previous status also alertable?"}
+    U -- No --> U1(["NEW INCIDENT\nalert, since = now"])
+    U -- Yes --> V{"Was alertedAt already set?"}
+    V -- Yes --> V1(["ONGOING, SILENCED\nno alert; since/alertedAt kept unchanged"])
+    V -- No --> V2(["RETRY ALERT\nlast run's write must have failed"])
+```
+
+That `ONGOING, SILENCED` branch is why a vendor that's still down doesn't
+re-alert every 5 minutes — and why `since` keeps pointing at when the
+incident *actually* started even across many silent runs, so the eventual
+recovery message reports the true total downtime.
 
 ## Adding a vendor
 
