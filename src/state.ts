@@ -91,20 +91,25 @@ async function writeRepoVariable(state: StackState): Promise<void> {
   }
 }
 
-function tempStateFilePath(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stackwatch-'));
-  return path.join(dir, CACHE_STATE_FILE);
+/** MUST be a fixed path, not a freshly-generated one (e.g. via
+ * `mkdtempSync`). `@actions/cache`'s restore extracts files to the exact
+ * absolute path recorded at save time (GNU tar with `-P`), not to whatever
+ * path is passed into `restoreCache` for a later call — so the save-time and
+ * restore-time paths must be identical across separate runs for the cache
+ * fallback to ever actually round-trip anything. */
+function cacheStateFilePath(): string {
+  return path.join(os.tmpdir(), CACHE_STATE_FILE);
 }
 
 async function readCacheState(): Promise<StackState> {
-  const filePath = tempStateFilePath();
+  const filePath = cacheStateFilePath();
   const hitKey = await cache.restoreCache([filePath], CACHE_KEY);
   if (!hitKey || !fs.existsSync(filePath)) return emptyState();
   return parseState(fs.readFileSync(filePath, 'utf8')) ?? emptyState();
 }
 
 async function writeCacheState(state: StackState): Promise<void> {
-  const filePath = tempStateFilePath();
+  const filePath = cacheStateFilePath();
   fs.writeFileSync(filePath, JSON.stringify(state));
   // NOTE: Actions cache keys are immutable once saved — a fixed key can only
   // be written once per scope. This makes the cache layer a genuine

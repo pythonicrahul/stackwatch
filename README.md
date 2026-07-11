@@ -54,14 +54,29 @@ jobs:
    for the channel you want alerts in, and save it as a repository secret
    named `STACKWATCH_SLACK_WEBHOOK`.
 2. Add the workflow above to `.github/workflows/stackwatch.yml`.
-3. Grant `permissions: actions: write` (shown above) — this lets stackwatch
-   read/write a repo variable named `STACKWATCH_STATE` used to remember what
-   was already alerted, so it doesn't repeat itself every run.
-4. Pass `GITHUB_TOKEN` through as a step/job `env` var, exactly as shown above.
-   GitHub does **not** inject it into an action's process automatically —
-   without this line, stackwatch falls back to GitHub Actions cache for state,
-   which works but is best-effort only (cache keys are immutable once written,
-   so it can't reliably track state run after run).
+3. Grant `permissions: actions: write` (shown above).
+4. Pass a token through as the step/job `GITHUB_TOKEN` env var, exactly as
+   shown above — GitHub does **not** inject one into an action's process
+   automatically.
+
+   **Important:** the default `${{ secrets.GITHUB_TOKEN }}` will **not**
+   actually give you the repo-variable state layer. GitHub's automatic
+   per-run token cannot manage Actions variables/secrets via the REST API —
+   this is a hard platform restriction (to stop a workflow from
+   self-escalating by rewriting its own secrets), not a permissions
+   misconfiguration, and no `permissions:` block can grant it. Every
+   consumer using the default token will get a `403` on the repo-variable
+   read/write and silently fall back to the Actions cache layer instead.
+   That fallback is handled correctly (confirmed in real E2E testing) but is
+   best-effort only, since cache keys are immutable once written and can't
+   reliably track state run after run.
+
+   To actually get the reliable repo-variable layer, create a
+   [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new)
+   scoped to just this repo with the **Variables: Read and write**
+   repository permission, save it as a secret (e.g. `STACKWATCH_PAT`), and
+   pass *that* as `GITHUB_TOKEN` in the workflow instead of
+   `secrets.GITHUB_TOKEN`.
 5. Enable whichever `monitor_*` inputs you want — every vendor defaults to
    `false` (opt-in only).
 
