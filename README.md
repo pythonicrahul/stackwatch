@@ -67,9 +67,11 @@ jobs:
    misconfiguration, and no `permissions:` block can grant it. Every
    consumer using the default token will get a `403` on the repo-variable
    read/write and silently fall back to the Actions cache layer instead.
-   That fallback is handled correctly (confirmed in real E2E testing) but is
-   best-effort only, since cache keys are immutable once written and can't
-   reliably track state run after run.
+   That fallback is confirmed working end-to-end (including correctly
+   suppressing repeat alerts across runs) — it's a genuine fallback, not
+   just a stopgap — but the repo-variable layer is still the one to prefer
+   when you can, since Actions cache entries are subject to the platform's
+   normal 7-day/10GB-per-repo eviction.
 
    To actually get the reliable repo-variable layer, create a
    [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new)

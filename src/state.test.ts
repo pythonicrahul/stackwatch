@@ -11,7 +11,7 @@ vi.mock('@actions/cache', () => ({
 
 const REPO_VAR_URL = 'https://api.github.com/repos/acme/widgets/actions/variables/STACKWATCH_STATE';
 const REPO_VAR_CREATE_URL = 'https://api.github.com/repos/acme/widgets/actions/variables';
-const CACHE_KEY = 'stackwatch-state-v1';
+const CACHE_KEY_PREFIX = 'stackwatch-state-v1';
 
 const originalEnv = { ...process.env };
 
@@ -52,7 +52,7 @@ describe('state.ts', () => {
       const state = await readState();
 
       expect(fetchMock).not.toHaveBeenCalled();
-      expect(cache.restoreCache).toHaveBeenCalledWith(expect.any(Array), CACHE_KEY);
+      expect(cache.restoreCache).toHaveBeenCalledWith(expect.any(Array), expect.any(String), [CACHE_KEY_PREFIX]);
       expect(state.schemaVersion).toBe(SCHEMA_VERSION);
       expect(state.services).toEqual({});
     });
@@ -101,7 +101,7 @@ describe('state.ts', () => {
       const cached = sampleState();
       vi.mocked(cache.restoreCache).mockImplementation(async (paths) => {
         fs.writeFileSync((paths as string[])[0] as string, JSON.stringify(cached));
-        return CACHE_KEY;
+        return `${CACHE_KEY_PREFIX}-1234567890`;
       });
 
       const state = await readState();
@@ -156,7 +156,7 @@ describe('state.ts', () => {
 
       await writeState(sampleState());
 
-      expect(cache.saveCache).toHaveBeenCalledWith(expect.any(Array), CACHE_KEY);
+      expect(cache.saveCache).toHaveBeenCalledWith(expect.any(Array), expect.stringMatching(new RegExp(`^${CACHE_KEY_PREFIX}-`)));
     });
 
     it('goes straight to the cache layer when GITHUB_REPOSITORY/GITHUB_TOKEN are missing', async () => {
@@ -178,6 +178,27 @@ describe('state.ts', () => {
       vi.mocked(cache.saveCache).mockRejectedValue(new Error('cache reserve failed'));
 
       await expect(writeState(sampleState())).resolves.toBeUndefined();
+    });
+
+    it('uses a fresh key on every write, never colliding with the immutable key from a prior write', async () => {
+      // Confirmed via real E2E testing: Actions cache keys are immutable, so
+      // reusing a fixed key on a second write fails with "unable to reserve
+      // cache" — which would leave every later run reading the *first*
+      // stale write forever and re-alerting on it every time (breaking
+      // P-3/G-3). Each write must therefore get its own unique key.
+      delete process.env.GITHUB_REPOSITORY;
+      delete process.env.GITHUB_TOKEN;
+      vi.stubGlobal('fetch', vi.fn());
+      vi.mocked(cache.saveCache).mockResolvedValue(1);
+
+      await writeState(sampleState());
+      await writeState(sampleState());
+
+      const [, firstKey] = vi.mocked(cache.saveCache).mock.calls[0] as [string[], string];
+      const [, secondKey] = vi.mocked(cache.saveCache).mock.calls[1] as [string[], string];
+      expect(firstKey).not.toBe(secondKey);
+      expect(firstKey.startsWith(CACHE_KEY_PREFIX)).toBe(true);
+      expect(secondKey.startsWith(CACHE_KEY_PREFIX)).toBe(true);
     });
   });
 });

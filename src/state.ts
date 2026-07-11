@@ -6,7 +6,7 @@ import * as path from 'path';
 import { SCHEMA_VERSION, StackState } from './types';
 
 const REPO_VARIABLE_NAME = 'STACKWATCH_STATE';
-const CACHE_KEY = 'stackwatch-state-v1';
+const CACHE_KEY_PREFIX = 'stackwatch-state-v1';
 const CACHE_STATE_FILE = 'stackwatch-state.json';
 
 function emptyState(): StackState {
@@ -101,9 +101,18 @@ function cacheStateFilePath(): string {
   return path.join(os.tmpdir(), CACHE_STATE_FILE);
 }
 
+/** Actions cache keys are immutable once saved — writing under a fixed key
+ * a second time fails with "unable to reserve cache" (confirmed in real E2E
+ * testing: the write silently no-ops instead of throwing). Without a
+ * mutable key, every run after the first state change would keep restoring
+ * the *same* stale entry forever and re-alert on it every time, which
+ * breaks the no-repeat-alert guarantee (P-3/G-3) outright — worse than
+ * merely "best effort". So each write uses a fresh, unique key, and reads
+ * use `restoreKeys` prefix matching to fetch whichever one was saved most
+ * recently; older entries just age out via the normal 7-day cache eviction. */
 async function readCacheState(): Promise<StackState> {
   const filePath = cacheStateFilePath();
-  const hitKey = await cache.restoreCache([filePath], CACHE_KEY);
+  const hitKey = await cache.restoreCache([filePath], `${CACHE_KEY_PREFIX}-none`, [CACHE_KEY_PREFIX]);
   if (!hitKey || !fs.existsSync(filePath)) return emptyState();
   return parseState(fs.readFileSync(filePath, 'utf8')) ?? emptyState();
 }
@@ -111,11 +120,7 @@ async function readCacheState(): Promise<StackState> {
 async function writeCacheState(state: StackState): Promise<void> {
   const filePath = cacheStateFilePath();
   fs.writeFileSync(filePath, JSON.stringify(state));
-  // NOTE: Actions cache keys are immutable once saved — a fixed key can only
-  // be written once per scope. This makes the cache layer a genuine
-  // best-effort fallback, not a reliable long-term store; the repo variable
-  // layer is the one that should be relied on for continuous operation.
-  await cache.saveCache([filePath], CACHE_KEY);
+  await cache.saveCache([filePath], `${CACHE_KEY_PREFIX}-${crypto.randomUUID()}`);
 }
 
 /** Reads previous state: repo variable is primary (FR-12), Actions cache is
