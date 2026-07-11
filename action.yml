@@ -29,6 +29,16 @@ inputs:
     required: false
     default: 'false'
 
+outputs:
+  has_incidents:
+    description: 'true if any monitored vendor is in a new alertable incident this run.'
+  new_incident_count:
+    description: 'Number of new incidents alerted on this run.'
+  recovered_count:
+    description: 'Number of vendors that recovered this run.'
+  alert_sent:
+    description: 'true if a Slack message was sent and accepted this run.'
+
 runs:
   using: 'node24'
   main: 'dist/index.js'

@@ -117,6 +117,56 @@ describe('buildAlertBlocks', () => {
     const blocks = buildAlertBlocks(diffResult, previous);
     expect(blocks[0]?.text?.text).toBe(`🟢 *svc* — Recovered after ${expected} of downtime`);
   });
+
+  it('escapes Slack mrkdwn special characters in a vendor description', () => {
+    const diffResult: DiffResult = {
+      hasChanges: true,
+      newIncidents: [
+        {
+          name: 'GitHub',
+          status: 'degraded_performance',
+          description: 'A & B affected, see <https://example.com> for updates',
+          fetchedAt: NOW_ISO,
+        },
+      ],
+      recovered: [],
+    };
+    const blocks = buildAlertBlocks(diffResult, emptyPrevious());
+    expect(blocks[0]?.text?.text).toContain('A &amp; B affected, see &lt;https://example.com&gt; for updates');
+  });
+
+  it('falls back to placeholder text when the vendor description is empty or null', () => {
+    const diffResult: DiffResult = {
+      hasChanges: true,
+      newIncidents: [
+        { name: 'GitHub', status: 'degraded_performance', description: '', fetchedAt: NOW_ISO },
+        {
+          name: 'Datadog',
+          status: 'degraded_performance',
+          description: null as unknown as string,
+          fetchedAt: NOW_ISO,
+        },
+      ],
+      recovered: [],
+    };
+    const blocks = buildAlertBlocks(diffResult, emptyPrevious());
+    expect(blocks[0]?.text?.text).toContain('No description provided.');
+    expect(blocks[1]?.text?.text).toContain('No description provided.');
+  });
+
+  it('truncates an overly long vendor description so it cannot exceed Slack Block Kit limits', () => {
+    const longDescription = 'x'.repeat(400);
+    const diffResult: DiffResult = {
+      hasChanges: true,
+      newIncidents: [{ name: 'GitHub', status: 'degraded_performance', description: longDescription, fetchedAt: NOW_ISO }],
+      recovered: [],
+    };
+    const blocks = buildAlertBlocks(diffResult, emptyPrevious());
+    const text = blocks[0]?.text?.text ?? '';
+    const descriptionLine = text.split('\n')[1] ?? '';
+    expect(descriptionLine.length).toBeLessThan(400);
+    expect(descriptionLine.endsWith('…')).toBe(true);
+  });
 });
 
 describe('sendSlackAlert', () => {
@@ -148,5 +198,26 @@ describe('sendSlackAlert', () => {
     } catch (error) {
       expect((error as Error).message).not.toContain(secretUrl);
     }
+  });
+
+  it('sends the request with an abort signal so a hung request cannot block indefinitely (NFR-2)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await sendSlackAlert('https://hooks.slack.example/x', []);
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('rejects if the Slack request hangs past the timeout', async () => {
+    const fetchMock = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(sendSlackAlert('https://hooks.slack.example/x', [], 20)).rejects.toThrow();
   });
 });

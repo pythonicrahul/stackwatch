@@ -29,11 +29,24 @@ function getBooleanInputOrDefault(name: string, defaultValue: boolean): boolean 
   return core.getInput(name).trim() === '' ? defaultValue : core.getBooleanInput(name);
 }
 
+/** Slack incoming webhooks are always issued under this exact host+path
+ * shape (https://api.slack.com/messaging/webhooks), regardless of
+ * workspace. Checking it up front means a typo'd secret fails immediately
+ * with a clear message, instead of after fetching every enabled vendor,
+ * on a generic network error from the eventual POST in alert.ts. */
+const SLACK_WEBHOOK_PATTERN = /^https:\/\/hooks\.slack\.com\/services\/\S+$/;
+
 /** Reads action inputs. Booleans MUST go through `core.getBooleanInput` —
  * string comparison to `'true'` is a forbidden antipattern (FR-4). Throws if
- * `slack_webhook` is missing (FR-1). */
+ * `slack_webhook` is missing (FR-1) or doesn't look like a real Slack
+ * incoming webhook URL. */
 export function loadConfig(): Config {
   const slackWebhook = core.getInput('slack_webhook', { required: true });
+  if (!SLACK_WEBHOOK_PATTERN.test(slackWebhook)) {
+    throw new Error(
+      'slack_webhook does not look like a Slack incoming webhook URL (expected https://hooks.slack.com/services/...). Double-check the secret value.'
+    );
+  }
 
   const enabledVendors = (Object.keys(VENDOR_INPUTS) as VendorId[]).filter((vendor) =>
     getBooleanInputOrDefault(VENDOR_INPUTS[vendor], false)

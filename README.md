@@ -30,6 +30,10 @@ on:
     - cron: '*/5 * * * *'
   workflow_dispatch:
 
+concurrency:
+  group: stackwatch
+  cancel-in-progress: false
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -48,7 +52,13 @@ jobs:
 1. Create a [Slack incoming webhook](https://api.slack.com/messaging/webhooks)
    for the channel you want alerts in, and save it as a repository secret
    named `STACKWATCH_SLACK_WEBHOOK`.
-2. Add the workflow above to `.github/workflows/stackwatch.yml`.
+2. Add the workflow above to `.github/workflows/stackwatch.yml`. The
+   `concurrency:` block matters more than it looks — without it, an
+   unusually slow run (e.g. a vendor API hanging near its 5s timeout) could
+   still be in flight when the next 5-minute cron fires, and both runs would
+   read the same previous state and could independently alert on the same
+   transition. `concurrency:` makes GitHub queue the next run instead of
+   starting it in parallel.
 3. Enable whichever `monitor_*` inputs you want — every vendor defaults to
    `false` (opt-in only).
 
@@ -78,6 +88,23 @@ Inputs you don't set stay disabled and are never fetched.
 | `monitor_datadog`    | boolean | No       | `false` | Monitor Datadog status           |
 | `monitor_clickhouse` | boolean | No       | `false` | Monitor ClickHouse Cloud status  |
 | `monitor_claude`     | boolean | No       | `false` | Monitor Claude / Anthropic status|
+
+### Outputs
+
+Every run (other than "no `monitor_*` enabled") sets these, so a later step
+in the same job can react without re-parsing logs:
+
+| Name                  | Type    | Description                                             |
+| --------------------- | ------- | --------------------------------------------------------|
+| `has_incidents`       | boolean | `true` if any vendor is in a new alertable incident this run |
+| `new_incident_count`  | number  | Count of new incidents alerted on this run               |
+| `recovered_count`     | number  | Count of vendors that recovered this run                 |
+| `alert_sent`          | boolean | `true` if a Slack message was sent and accepted this run  |
+
+Every run also writes a per-vendor status table to the job's **Summary**
+tab in the Actions UI — current status plus whether this run alerted or
+recovered on it — so you can see the outcome at a glance without opening
+logs, even on a totally silent, healthy run.
 
 ## How it works
 
