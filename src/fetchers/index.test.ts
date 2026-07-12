@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fetchEnabledServices } from './index';
+import { fetchEnabledServices, SUPPORTED_VENDOR_IDS } from './index';
 
 const GITHUB_STATUS_URL = 'https://www.githubstatus.com/api/v2/summary.json';
 const DATADOG_STATUS_URL = 'https://status.datadoghq.com/api/v2/summary.json';
@@ -72,5 +72,11 @@ describe('fetchEnabledServices', () => {
     expect(results.find((r) => r.name === 'Datadog')?.status).toBe('unknown');
     expect(results.find((r) => r.name === 'GitHub')?.status).toBe('operational');
     expect(results.find((r) => r.name === 'Claude')?.status).toBe('operational');
+  });
+});
+
+describe('SUPPORTED_VENDOR_IDS', () => {
+  it('lists exactly the registered vendors, the single source of truth for vendor validation elsewhere', () => {
+    expect(SUPPORTED_VENDOR_IDS.sort()).toEqual(['claude', 'clickhouse', 'datadog', 'github']);
   });
 });

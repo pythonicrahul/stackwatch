@@ -3,29 +3,27 @@ import * as core from '@actions/core';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { SCHEMA_VERSION, StackState } from './types';
+import { emptyState, parseState } from './statePersistence';
+import { StackState } from './types';
 
 const CACHE_KEY_PREFIX = 'stackwatch-state-v1';
 const CACHE_STATE_FILE = 'stackwatch-state.json';
 
-function emptyState(): StackState {
-  return { schemaVersion: SCHEMA_VERSION, updatedAt: new Date().toISOString(), services: {} };
-}
-
-/** Parses stored state, discarding it on schema mismatch or corruption (FR-15). */
-function parseState(raw: string): StackState | null {
-  try {
-    const parsed = JSON.parse(raw) as StackState;
-    if (parsed.schemaVersion !== SCHEMA_VERSION) {
-      core.warning(
-        `stackwatch: state schemaVersion mismatch (found ${String(parsed.schemaVersion)}, expected ${SCHEMA_VERSION}); reinitialising.`
-      );
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
+/** Parses stored state, discarding it and logging why on schema mismatch or
+ * corruption (FR-15) — both cases now warn (corrupt JSON previously failed
+ * silently; fixed as part of extracting the shared, logging-free
+ * `parseState` in statePersistence.ts). */
+function parseStateOrEmpty(raw: string): StackState {
+  const result = parseState(raw);
+  if (result.ok) return result.state;
+  if (result.reason === 'schema_mismatch') {
+    core.warning(
+      `stackwatch: state schemaVersion mismatch (found ${String(result.found)}, expected the current schema); reinitialising.`
+    );
+  } else {
+    core.warning('stackwatch: stored state was corrupt JSON; reinitialising.');
   }
+  return emptyState();
 }
 
 /** MUST be a fixed path, not a freshly-generated one (e.g. via
@@ -60,7 +58,7 @@ export async function readState(): Promise<StackState> {
     const filePath = cacheStateFilePath();
     const hitKey = await cache.restoreCache([filePath], `${CACHE_KEY_PREFIX}-none`, [CACHE_KEY_PREFIX]);
     if (!hitKey || !fs.existsSync(filePath)) return emptyState();
-    return parseState(fs.readFileSync(filePath, 'utf8')) ?? emptyState();
+    return parseStateOrEmpty(fs.readFileSync(filePath, 'utf8'));
   } catch (error) {
     core.warning(`stackwatch: cache state read failed, treating as first run: ${(error as Error).message}`);
     return emptyState();

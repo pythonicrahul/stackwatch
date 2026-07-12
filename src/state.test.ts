@@ -1,4 +1,5 @@
 import * as cache from '@actions/cache';
+import * as core from '@actions/core';
 import * as fs from 'fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readState, writeState } from './state';
@@ -23,6 +24,7 @@ describe('state.ts', () => {
   beforeEach(() => {
     vi.mocked(cache.restoreCache).mockReset();
     vi.mocked(cache.saveCache).mockReset();
+    vi.spyOn(core, 'warning').mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -63,9 +65,10 @@ describe('state.ts', () => {
 
       expect(state.schemaVersion).toBe(SCHEMA_VERSION);
       expect(state.services).toEqual({});
+      expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('schemaVersion mismatch'));
     });
 
-    it('discards state and reinitialises on corrupt JSON', async () => {
+    it('discards state, warns, and reinitialises on corrupt JSON (previously silent — fixed alongside the statePersistence.ts extraction)', async () => {
       vi.mocked(cache.restoreCache).mockImplementation(async (paths) => {
         fs.writeFileSync((paths as string[])[0] as string, 'not json');
         return `${CACHE_KEY_PREFIX}-1234567890`;
@@ -74,6 +77,7 @@ describe('state.ts', () => {
       const state = await readState();
 
       expect(state.services).toEqual({});
+      expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('corrupt JSON'));
     });
 
     it('returns empty state (never throws) when the cache service itself is unavailable', async () => {

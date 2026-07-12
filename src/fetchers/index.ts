@@ -17,6 +17,12 @@ const FETCHERS: Record<VendorId, Fetcher> = {
   clickhouse: createClickHouseFetcher(),
 };
 
+/** Single source of truth for "what vendors exist" — both the Action's
+ * config (`VENDOR_INPUTS` in config.ts, keyed by `monitor_*` input name) and
+ * the daemon's config (a plain `VENDORS=github,datadog` list) validate
+ * against this rather than hand-duplicating the vendor list. */
+export const SUPPORTED_VENDOR_IDS = Object.keys(FETCHERS) as VendorId[];
+
 /** Fetches only the enabled vendors concurrently (FR-5, FR-6). Each fetcher
  * already catches its own errors into an `unknown` result, so
  * Promise.allSettled here is defense-in-depth against an adapter that throws
