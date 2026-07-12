@@ -20,11 +20,21 @@ export interface Subscriber {
 export interface DaemonConfig {
   subscribers: Subscriber[];
   cronExpression: string;
+  /** Expected gap between polls, in milliseconds — used only for the health
+   * endpoint's staleness threshold (createHealthTracker), NOT derived from
+   * `cronExpression` itself. Cron expressions can express irregular
+   * schedules (e.g. weekday-only) that don't reduce to a fixed interval, so
+   * rather than parsing cron syntax to guess one, this is set independently
+   * and defaults to match the default cron expression. If you override
+   * `CRON_EXPRESSION` to something with a different effective gap, override
+   * this too, or the health check's staleness threshold won't match reality. */
+  pollIntervalMs: number;
   stateFilePath: string;
   healthPort: number;
 }
 
 const DEFAULT_CRON_EXPRESSION = '*/5 * * * *';
+const DEFAULT_POLL_INTERVAL_MS = 5 * 60_000;
 const DEFAULT_STATE_FILE_PATH = '/data/state.json';
 const DEFAULT_HEALTH_PORT = 8080;
 
@@ -59,13 +69,26 @@ function parseVendors(raw: string | undefined): VendorId[] {
   return requested as VendorId[];
 }
 
+/** `0` is deliberately valid (not just 1-65535) — the standard "let the OS
+ * assign a free port" convention (as used by Node's own `server.listen(0)`),
+ * useful for tests and any deployment where the actual port is discovered
+ * from the daemon's own startup log rather than fixed in advance. */
 function parseHealthPort(raw: string | undefined): number {
   if (!raw || raw.trim() === '') return DEFAULT_HEALTH_PORT;
   const port = Number(raw);
-  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-    throw new Error(`HEALTH_PORT must be a valid port number (1-65535), got "${raw}".`);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new Error(`HEALTH_PORT must be a valid port number (0-65535), got "${raw}".`);
   }
   return port;
+}
+
+function parsePollIntervalMs(raw: string | undefined): number {
+  if (!raw || raw.trim() === '') return DEFAULT_POLL_INTERVAL_MS;
+  const ms = Number(raw);
+  if (!Number.isFinite(ms) || ms <= 0) {
+    throw new Error(`POLL_INTERVAL_MS must be a positive number, got "${raw}".`);
+  }
+  return ms;
 }
 
 /** Fail-fast, pure validation — no `process.exit`, just throws on anything
@@ -90,6 +113,7 @@ export function loadDaemonConfig(env: NodeJS.ProcessEnv = process.env): DaemonCo
   return {
     subscribers: [{ name: 'default', slackWebhook, vendors }],
     cronExpression: env.CRON_EXPRESSION?.trim() || DEFAULT_CRON_EXPRESSION,
+    pollIntervalMs: parsePollIntervalMs(env.POLL_INTERVAL_MS),
     stateFilePath: env.STATE_FILE_PATH?.trim() || DEFAULT_STATE_FILE_PATH,
     healthPort: parseHealthPort(env.HEALTH_PORT),
   };

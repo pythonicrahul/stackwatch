@@ -71,26 +71,42 @@ describe('loadDaemonConfig', () => {
     expect(config.subscribers[0]?.vendors).toEqual(['github', 'datadog']);
   });
 
-  it('applies sensible defaults for cron expression, state file path, and health port', () => {
+  it('applies sensible defaults for cron expression, poll interval, state file path, and health port', () => {
     const config = loadDaemonConfig(baseEnv());
 
     expect(config.cronExpression).toBe('*/5 * * * *');
+    expect(config.pollIntervalMs).toBe(5 * 60_000);
     expect(config.stateFilePath).toBe('/data/state.json');
     expect(config.healthPort).toBe(8080);
   });
 
-  it('honors overrides for cron expression, state file path, and health port', () => {
+  it('honors overrides for cron expression, poll interval, state file path, and health port', () => {
     const config = loadDaemonConfig(
-      baseEnv({ CRON_EXPRESSION: '*/10 * * * *', STATE_FILE_PATH: '/custom/state.json', HEALTH_PORT: '9090' })
+      baseEnv({
+        CRON_EXPRESSION: '*/10 * * * *',
+        POLL_INTERVAL_MS: '600000',
+        STATE_FILE_PATH: '/custom/state.json',
+        HEALTH_PORT: '9090',
+      })
     );
 
     expect(config.cronExpression).toBe('*/10 * * * *');
+    expect(config.pollIntervalMs).toBe(600_000);
     expect(config.stateFilePath).toBe('/custom/state.json');
     expect(config.healthPort).toBe(9090);
   });
 
   it('throws on an invalid HEALTH_PORT instead of silently coercing it', () => {
     expect(() => loadDaemonConfig(baseEnv({ HEALTH_PORT: 'not-a-port' }))).toThrow(/HEALTH_PORT must be a valid port number/);
+    expect(() => loadDaemonConfig(baseEnv({ HEALTH_PORT: '-1' }))).toThrow(/HEALTH_PORT must be a valid port number/);
+  });
+
+  it('accepts HEALTH_PORT=0 — the standard "let the OS assign a free port" convention, used by tests', () => {
+    expect(loadDaemonConfig(baseEnv({ HEALTH_PORT: '0' })).healthPort).toBe(0);
+  });
+
+  it('throws on an invalid POLL_INTERVAL_MS instead of silently coercing it', () => {
+    expect(() => loadDaemonConfig(baseEnv({ POLL_INTERVAL_MS: '-5' }))).toThrow(/POLL_INTERVAL_MS must be a positive number/);
   });
 
   it('resolves SLACK_WEBHOOK via the _FILE convention too', () => {

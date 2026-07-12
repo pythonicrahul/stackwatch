@@ -6,9 +6,12 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "ncc build src/main.ts -o dist --minify --license licenses.txt",
+    "build:daemon": "rm -rf lib && tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "pretest:integration": "npm run build:daemon",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "package": "npm run typecheck && npm run test && npm run build"
   },
   "license": "MIT",

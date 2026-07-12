@@ -22,7 +22,7 @@ function subscriber(overrides: Partial<Subscriber> = {}): Subscriber {
 }
 
 function config(subscribers: Subscriber[]): DaemonConfig {
-  return { subscribers, cronExpression: '*/5 * * * *', stateFilePath: '/data/state.json', healthPort: 8080 };
+  return { subscribers, cronExpression: '*/5 * * * *', pollIntervalMs: 5 * 60_000, stateFilePath: '/data/state.json', healthPort: 8080 };
 }
 
 function result(name: string, status: ServiceResult['status'] = 'operational'): ServiceResult {
