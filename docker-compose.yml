@@ -1,0 +1,16 @@
+services:
+  stackwatch:
+    image: ghcr.io/pythonicrahul/stackwatch-daemon:latest
+    # build: .   # uncomment to build from source instead of pulling the published image
+    environment:
+      SLACK_WEBHOOK: ${SLACK_WEBHOOK:?set SLACK_WEBHOOK in your environment or a .env file}
+      VENDORS: github,datadog,clickhouse,claude
+      STATE_FILE_PATH: /data/state.json
+    volumes:
+      - stackwatch-data:/data
+    ports:
+      - '8080:8080'
+    restart: unless-stopped
+
+volumes:
+  stackwatch-data:

@@ -1,0 +1,14 @@
+node_modules
+lib
+dist
+.git
+.github
+.claude
+.cursor
+.vscode
+coverage
+*.log
+*.tsbuildinfo
+src/**/*.test.ts
+*.md
+PRD.md
