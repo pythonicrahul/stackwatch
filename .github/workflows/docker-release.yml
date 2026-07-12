@@ -47,8 +47,11 @@ jobs:
       # NOTE: unlike Actions secrets/variables, GITHUB_TOKEN CAN push to GHCR
       # with packages:write (this is a real, documented, grantable scope —
       # not the same kind of hard platform block we hit with repo variables
-      # elsewhere in this project). What it can't do is flip the resulting
-      # package's visibility to public: a package's *first* push defaults to
-      # private even on a successful workflow run, and an unauthenticated
-      # `docker pull` will 404 until visibility is changed once, manually, in
-      # the GitHub UI (Package settings -> Danger Zone -> Change visibility).
+      # elsewhere in this project). Verified for real after the first push
+      # from this workflow: the resulting package was immediately public —
+      # `docker manifest inspect` and a raw anonymous-token manifest fetch
+      # both succeeded with zero credentials, no manual visibility change
+      # needed. (GHCR appears to inherit the pushing repo's own visibility —
+      # this repo is public — rather than always defaulting new packages to
+      # private; if you fork this into a private repo, check your package's
+      # visibility after the first push rather than assuming either way.)
