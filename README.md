@@ -164,28 +164,75 @@ recovery message reports the true total downtime.
    (`src/config.ts`), and as a new `monitor_*` input in `action.yml`.
 3. Run `npm run package` to rebuild `dist/index.js`.
 
-## Roadmap: self-hosted Docker daemon (planned)
+## Self-hosted Docker daemon
 
 The GitHub Action above is ideal for a single team already using GitHub
-Actions. A separate, self-hosted Docker image is planned for teams that want
-one central place to run stackwatch, outside of GitHub Actions billing
-entirely.
+Actions. For teams that want one central place to run stackwatch — outside
+of GitHub Actions billing entirely, e.g. on your own k8s/ECS/laptop — there's
+also a self-hosted Docker image, built from the exact same vendor-polling,
+diffing, and Slack-formatting logic (`fetchers/`, `diff.ts`, the Block Kit
+builder in `alert.ts`) as the Action. Only the logging/output layer and the
+state-storage backend (Actions cache vs. a local file/volume) differ.
 
-- **Long-running daemon**, not a run-to-completion script — schedules itself
-  internally with `node-cron` so it works identically via `docker run -d`,
-  `docker-compose`, an ECS Service, or a k8s Deployment, without depending on
-  an external scheduler the way a k8s `CronJob` would.
-- **Phase 1**: single-tenant, functionally equivalent to the Action today —
-  one webhook, one vendor list — just packaged as a daemon.
-- **Phase 2**: multi-subscriber — one running instance polls each distinct
-  vendor once and fans out to every subscriber who wants it, so a platform
-  team serving many internal teams/channels doesn't need one redundant
-  deployment per team, each independently polling the same vendors.
-- The vendor-polling, diffing, and Slack-formatting logic (`fetchers/`,
-  `diff.ts`, the Block Kit builder in `alert.ts`) is shared with the Action
-  unchanged — only the logging/output layer (currently `@actions/core`-
-  specific) and the state-storage backend (Actions cache vs. a local
-  file/volume) differ between the two.
+Published to `ghcr.io/pythonicrahul/stackwatch-daemon:latest` (also tagged
+`:sha-<commit>` for pinning), built for both `linux/amd64` and `linux/arm64`
+on every push to `main` that touches the daemon's code.
+
+```bash
+docker run -d \
+  -e SLACK_WEBHOOK=https://hooks.slack.com/services/... \
+  -e VENDORS=github,datadog,clickhouse,claude \
+  -v stackwatch-data:/data \
+  -p 8080:8080 \
+  ghcr.io/pythonicrahul/stackwatch-daemon:latest
+```
+
+Or via the [`docker-compose.yml`](./docker-compose.yml) in this repo:
+
+```bash
+SLACK_WEBHOOK=https://hooks.slack.com/services/... docker compose up -d
+```
+
+It's a **long-running daemon**, not a run-to-completion script — it
+schedules itself internally with `node-cron` (using its built-in
+`noOverlap` guard, so a slow cycle can't overlap the next tick) rather than
+relying on an external scheduler, so it works identically via `docker run
+-d`, `docker-compose`, an ECS Service, or a k8s Deployment. It polls once
+immediately at startup, then on the configured interval, and shuts down
+gracefully on `SIGTERM`/`SIGINT` — waiting for any in-flight cycle to finish
+(bounded by a timeout) before exiting.
+
+Currently single-tenant — one webhook, one vendor list, matching the
+Action's own scope. Multi-subscriber (one running instance serving several
+internal Slack channels, each watching their own vendor subset, polling
+each distinct vendor only once) is planned as a later phase; the config is
+already internally shaped as a subscriber list so that'll be an additive
+change, not a rewrite.
+
+### Configuration
+
+| Env var                | Required | Default          | Description                                                        |
+| ----------------------- | -------- | ---------------- | -------------------------------------------------------------------|
+| `SLACK_WEBHOOK`         | Yes\*    | —                | Slack incoming webhook URL                                          |
+| `SLACK_WEBHOOK_FILE`    | Yes\*    | —                | Path to a file containing the webhook (see secrets note below)      |
+| `VENDORS`               | Yes      | —                | Comma-separated vendor ids: `github`, `datadog`, `clickhouse`, `claude` |
+| `CRON_EXPRESSION`       | No       | `*/5 * * * *`    | Standard 5-field cron expression                                    |
+| `POLL_INTERVAL_MS`      | No       | `300000` (5 min) | Expected gap between polls, used only for the health check's staleness threshold — **not derived from `CRON_EXPRESSION`** (cron can express irregular schedules that don't reduce to a fixed interval). If you change `CRON_EXPRESSION` to a different effective interval, update this too. |
+| `STATE_FILE_PATH`       | No       | `/data/state.json` | Where state is persisted — mount a volume here                    |
+| `HEALTH_PORT`           | No       | `8080`           | Port for the `/healthz` endpoint (`0` = let the OS assign a free port) |
+
+\* exactly one of `SLACK_WEBHOOK` / `SLACK_WEBHOOK_FILE` is required.
+
+Invalid config (missing/malformed webhook, unknown vendor id, bad port)
+fails fast: the daemon logs a clear error and exits `1` at startup rather
+than staying up in a broken state — let your orchestrator's restart policy
+surface that. **Config changes require a restart; there's no hot-reload.**
+
+`GET /healthz` returns `200` while healthy (including a grace period before
+the very first poll completes, so a readiness probe won't kill the
+container before it's had a chance to run once) and `503` once no poll has
+succeeded within roughly `2 × POLL_INTERVAL_MS` — a sign the internal
+scheduler has died without crashing the process.
 
 ### Best practice: handling the Slack webhook as a real secret
 
@@ -215,17 +262,32 @@ self-hosted container needs to be deliberate about not leaking the webhook:
 - The webhook is never logged, in any code path, matching the Action's
   existing NFR-4 discipline.
 
+If you fork this and publish your own image: GHCR packages appear to
+inherit the pushing repo's own visibility (this repo is public, and the
+published image was confirmed publicly pullable with zero credentials
+immediately after the first push) rather than always defaulting new
+packages to private — but check your own package's visibility after the
+first push rather than assuming either way.
+
 ## Development
 
 ```bash
 npm install
 npm run typecheck
-npm test           # vitest — unit tests for every module, mocking network/@actions/cache
-npm run build      # produces dist/index.js via @vercel/ncc
-npm run package    # typecheck + test + build, in that order
+npm test               # vitest — fast unit tests for every module (Action + daemon)
+npm run test:integration  # slow: builds the daemon, spawns it as a real child
+                           # process, hits a real /healthz, sends a real SIGTERM
+npm run build          # produces dist/index.js via @vercel/ncc (the Action)
+npm run build:daemon    # produces lib/daemon/* via tsc (the daemon; used by Dockerfile)
+npm run package         # typecheck + test + build, in that order
+docker build -t stackwatch-daemon .   # build the daemon image locally
 ```
 
-Tests are colocated as `src/**/*.test.ts` and never bundled into `dist/index.js`
-(`ncc` only follows `main.ts`'s own runtime imports). `dist/index.js` is
-committed and rebuilt automatically by `.github/workflows/release.yml` on
-every push to `main`; don't hand-edit it.
+Tests are colocated as `src/**/*.test.ts` and never bundled into
+`dist/index.js` (`ncc` only follows `main.ts`'s own runtime imports) or the
+Docker image (`tsconfig.build.json` excludes them from the daemon's
+compiled output). `dist/index.js` is committed and rebuilt automatically by
+`.github/workflows/release.yml` on every push to `main`; don't hand-edit
+it. The daemon image is rebuilt and republished by
+`.github/workflows/docker-release.yml` on every push to `main` that
+touches daemon-relevant files.
