@@ -164,6 +164,57 @@ recovery message reports the true total downtime.
    (`src/config.ts`), and as a new `monitor_*` input in `action.yml`.
 3. Run `npm run package` to rebuild `dist/index.js`.
 
+## Roadmap: self-hosted Docker daemon (planned)
+
+The GitHub Action above is ideal for a single team already using GitHub
+Actions. A separate, self-hosted Docker image is planned for teams that want
+one central place to run stackwatch, outside of GitHub Actions billing
+entirely.
+
+- **Long-running daemon**, not a run-to-completion script — schedules itself
+  internally with `node-cron` so it works identically via `docker run -d`,
+  `docker-compose`, an ECS Service, or a k8s Deployment, without depending on
+  an external scheduler the way a k8s `CronJob` would.
+- **Phase 1**: single-tenant, functionally equivalent to the Action today —
+  one webhook, one vendor list — just packaged as a daemon.
+- **Phase 2**: multi-subscriber — one running instance polls each distinct
+  vendor once and fans out to every subscriber who wants it, so a platform
+  team serving many internal teams/channels doesn't need one redundant
+  deployment per team, each independently polling the same vendors.
+- The vendor-polling, diffing, and Slack-formatting logic (`fetchers/`,
+  `diff.ts`, the Block Kit builder in `alert.ts`) is shared with the Action
+  unchanged — only the logging/output layer (currently `@actions/core`-
+  specific) and the state-storage backend (Actions cache vs. a local
+  file/volume) differ between the two.
+
+### Best practice: handling the Slack webhook as a real secret
+
+Unlike the Action (where GitHub Actions secrets already handle this), a
+self-hosted container needs to be deliberate about not leaking the webhook:
+
+- `docker inspect` and `kubectl describe pod` both dump plain env vars in
+  full — a literal `-e SLACK_WEBHOOK=...` is visible to anyone who can read
+  the container/pod, and is one accidental `git add` away from being
+  committed if it ends up hardcoded in a compose file or manifest.
+- The daemon supports the same convention several official images use (e.g.
+  Postgres's `POSTGRES_PASSWORD_FILE`): for any secret input, set
+  `<NAME>_FILE` to a file path instead of the literal `<NAME>` env var, and
+  the value is read from that file at startup. This composes with:
+  - **Kubernetes**: mount a `Secret` (never a `ConfigMap` — only `Secret`
+    gets base64-masking and optional at-rest encryption) as a volume, and
+    point `SLACK_WEBHOOK_FILE` at the mounted path. The plaintext then only
+    ever lives in the `Secret` object and a tmpfs-backed mount — never in
+    `kubectl describe pod` output.
+  - **Docker Swarm secrets**, which mount at `/run/secrets/<name>` for
+    exactly this reason.
+  - **Vault Agent injector** and similar sidecars, which write secrets to a
+    shared volume as files.
+  - Plain `docker run -e SLACK_WEBHOOK=...` still works unchanged for a
+    laptop/dev/single-user deployment — no extra ceremony for the simple
+    case.
+- The webhook is never logged, in any code path, matching the Action's
+  existing NFR-4 discipline.
+
 ## Development
 
 ```bash
